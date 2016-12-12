@@ -1,0 +1,2 @@
+#!/bin/bash
+time build/ARM/gem5.fast configs/example/fs.py --num-cpus=4 --caches --l2cache --machine-type=VExpress_EMM --disk-image=/home/gaknox2/ece511/homework3/disks/homework3.img --kernel=/home/gaknox2/ece511/homework3/binaries/vmlinux.aarch32.ll_20131205.0-gem5 --dtb-filename=/home/gaknox2/ece511/homework3/binaries/vexpress.aarch32.ll_20131205.0-gem5.4cpu.dtb --script=/home/gaknox2/ece511/gem5/test_scripts/hello.rcs --cpu-type=detailed --mem-size=2048MB --mem-type=DDR3_1600_x64

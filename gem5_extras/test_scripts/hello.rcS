@@ -1,0 +1,13 @@
+#!/bin/bash
+/sbin/m5 checkpoint 0 0
+/sbin/m5 resetstats 
+
+cd /home/gaknox2/ece511/gem5/tests/test-progs/hello/bin/arm/linux
+taskset ./hello  &
+pidnum1=${!}
+
+sleep 0.5
+
+kill $pidnum1
+
+/sbin/m5 exit
