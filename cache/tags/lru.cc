@@ -50,7 +50,6 @@
 #include "debug/CacheRepl.hh"
 #include "debug/Umon.hh"
 #include "mem/cache/base.hh"
-#include <vector>
 
 #define VERBOSE 1
 #define UmonInvalidContextID 4
@@ -274,54 +273,10 @@ LRU::removeUmon(int set, Addr tag){
 }
 
 void
-LRU::repartitionUmonHitStatic(Addr addr){
-    if(assoc != 8){
-        fatal("Assuming 8 ways");
-    }
-    
-    /*
+LRU::repartitionUmon(Addr addr){
     int set = extractSet(addr);
-    std::vector<int> cpuPriority;
-    int count = numCpus;
-    int highestPriority = -1;
-    while(count != 0){
-        for(unsigned i = 0; i < numCpus; i++){
-            bool inSet = false;
-            for()
-            
-            if()
-        }
-        
-        
-        count--;
-    }
     
-    */
-    /*Assigning priority based on highest hit counters. Distribution is static*/
-    
-    return;
-}
-
-void
-LRU::repartitionUmonHitDyn(Addr addr){
-    int set = extractSet(addr);
-    /*Assigning priority based on highest hit counters. Distribution is dynamic*/
-    
-    return;
-}
-
-void
-LRU::repartitionUmonTagStatic(Addr addr){
-    int set = extractSet(addr);
-    /*Assigning priority based on highest tag utilization. Distribution is dynamic*/
-    
-    return;
-}
-
-void
-LRU::repartitionUmonTagDyn(Addr addr){
-    int set = extractSet(addr);
-    /*Assigning priority based on highest tag utilization. Distribution is dynamic*/
+    //fatal("here in repartition");
     
     return;
 }
@@ -350,9 +305,9 @@ LRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int master_id)
         #if(VERBOSE)
             DPRINTF(Umon,"Beginning access with master id %d\n", master_id);
         #endif
-
-        int set = extractSet(addr);        
-        if(sets[set].umonAccesses >= sets[set].umonThreshold){
+        
+        if(umonAccesses >= umonThreashold){
+            int set = extractSet(addr);
             DPRINTF(Umon, "Beginning Umon repartitioning for set %d",set);
             repartitionUmon(addr);
             DPRINTF(Umon, "End repartition");
