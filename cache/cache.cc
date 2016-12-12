@@ -64,9 +64,6 @@
 #include "mem/cache/prefetch/base.hh"
 #include "sim/sim_exit.hh"
 
-//added to get around packets
-#define UmonInvalidContextID 4
-
 Cache::Cache(const CacheParams *p)
     : BaseCache(p, p->system->cacheLineSize()),
       tags(p->tags),
@@ -79,6 +76,7 @@ Cache::Cache(const CacheParams *p)
       writebackTempBlockAtomicEvent(this, false,
                                     EventBase::Delayed_Writeback_Pri)
 {
+    printf("Cache constructor \n");
     tempBlock = new CacheBlk();
     tempBlock->data = new uint8_t[blkSize];
 
@@ -321,21 +319,11 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
         lat = lookupLatency;
         return false;
     }
-    
-    /* added */
-    //finding tid
-    int tid;
-    if(pkt->req->hasContextId()){
-        tid = pkt->req->contextId();
-    }
-    else{
-        tid = UmonInvalidContextID;
-    }
-    /* end */
 
+ //   ContextID id = pkt->req->hasContextId() ?
+      //  pkt->req->contextId() : InvalidContextID;
     ContextID id = pkt->req->hasContextId() ?
-        pkt->req->contextId() : UmonInvalidContextID;
-        //pkt->req->contextId() : InvalidContextID;
+        pkt->req->contextId() : -1;                // -1 if no context ID           
     // Here lat is the value passed as parameter to accessBlock() function
     // that can modify its value.
     blk = tags->accessBlock(pkt->getAddr(), pkt->isSecure(), lat, id);
@@ -402,7 +390,8 @@ Cache::access(PacketPtr pkt, CacheBlk *&blk, Cycles &lat,
 
         if (blk == nullptr) {
             // need to do a replacement
-            blk = allocateBlock(pkt->getAddr(), pkt->isSecure(), writebacks, tid);
+            int cid = (pkt->req->hasContextId()) ? pkt->req->contextId() : -1 ;
+            blk = allocateBlock(pkt->getAddr(), pkt->isSecure(), writebacks , cid);
             if (blk == nullptr) {
                 // no replaceable block available: give up, fwd to next level.
                 incMissCount(pkt);
@@ -792,10 +781,18 @@ Cache::recvTimingReq(PacketPtr pkt)
 
             if (!mshr) {
                 // copy the request and create a new SoftPFReq packet
-                RequestPtr req = new Request(pkt->req->getPaddr(),
-                                             pkt->req->getSize(),
-                                             pkt->req->getFlags(),
-                                             pkt->req->masterId());
+                RequestPtr req ;
+                if (!pkt->req->hasContextId())
+                      req =new Request(pkt->req->getPaddr(),         // make sure we give it a contex ID
+                                    pkt->req->getSize(),
+                                    pkt->req->getFlags(),
+                                    pkt->req->masterId());
+                else
+                     req =new Request(pkt->req->getPaddr(),         // make sure we give it a contex ID
+                                    pkt->req->getSize(),
+                                    pkt->req->getFlags(),
+                                    pkt->req->masterId(),pkt->req->contextId());  
+               
                 pf = new Packet(req, pkt->cmd);
                 pf->allocate();
                 assert(pf->getAddr() == pkt->getAddr());
@@ -1562,8 +1559,14 @@ Cache::writebackBlk(CacheBlk *blk)
 
     writebacks[Request::wbMasterId]++;
 
-    Request *req = new Request(tags->regenerateBlkAddr(blk->tag, blk->set),
+    Request *req  ;
+     if(blk->thread_context ==-1) //no context ID
+       req = new Request(tags->regenerateBlkAddr(blk->tag, blk->set),
                                blkSize, 0, Request::wbMasterId);
+     else
+        req = new Request(tags->regenerateBlkAddr(blk->tag, blk->set),
+                               blkSize, 0, Request::wbMasterId , blk->thread_context); // calling created request constructor to assign a context Id to writeback request
+      
     if (blk->isSecure())
         req->setFlags(Request::SECURE);
 
@@ -1602,9 +1605,14 @@ Cache::cleanEvictBlk(CacheBlk *blk)
     assert(!writebackClean);
     assert(blk && blk->isValid() && !blk->isDirty());
     // Creating a zero sized write, a message to the snoop filter
-    Request *req =
-        new Request(tags->regenerateBlkAddr(blk->tag, blk->set), blkSize, 0,
+   
+    Request *req ;
+      if(blk->thread_context == -1)
+        req = new Request(tags->regenerateBlkAddr(blk->tag, blk->set), blkSize, 0,
                     Request::wbMasterId);
+      else
+        req = new Request(tags->regenerateBlkAddr(blk->tag, blk->set), blkSize, 0,   // call created request constructor which assigns a context ID to clean evict request
+                    Request::wbMasterId , blk->thread_context);
     if (blk->isSecure())
         req->setFlags(Request::SECURE);
 
@@ -1682,9 +1690,9 @@ Cache::invalidateVisitor(CacheBlk &blk)
 }
 
 CacheBlk*
-Cache::allocateBlock(Addr addr, bool is_secure, PacketList &writebacks, int tid)
+Cache::allocateBlock(Addr addr, bool is_secure, PacketList &writebacks, int id)
 {
-    CacheBlk *blk = tags->findVictim(addr, tid);
+    CacheBlk *blk = tags->findVictim(addr , id);
 
     // It is valid to return nullptr if there is no victim
     if (!blk)
@@ -1744,20 +1752,10 @@ Cache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
     assert(pkt->isResponse() || pkt->cmd == MemCmd::WriteLineReq);
     Addr addr = pkt->getAddr();
     bool is_secure = pkt->isSecure();
+    
 #if TRACING_ON
     CacheBlk::State old_state = blk ? blk->status : 0;
 #endif
-
-    /* added */
-    //finding tid
-    int tid;
-    if(pkt->req->hasContextId()){
-        tid = pkt->req->contextId();
-    }
-    else{
-        tid = UmonInvalidContextID;
-    }
-    /* end */
 
     // When handling a fill, we should have no writes to this line.
     assert(addr == blockAlign(addr));
@@ -1774,7 +1772,8 @@ Cache::handleFill(PacketPtr pkt, CacheBlk *blk, PacketList &writebacks,
 
         // need to do a replacement if allocating, otherwise we stick
         // with the temporary storage
-        blk = allocate ? allocateBlock(addr, is_secure, writebacks, tid) : nullptr;
+        int cid = (pkt->req->hasContextId())? pkt->req->contextId() : -1 ;  
+        blk = allocate ? allocateBlock(addr, is_secure, writebacks , cid) : nullptr;
 
         if (blk == nullptr) {
             // No replaceable block or a mostly exclusive

@@ -49,7 +49,7 @@ class BaseCache(MemObject):
     type = 'BaseCache'
     abstract = True
     cxx_header = "mem/cache/base.hh"
-
+    is_l2 = Param.Bool(False , 'is it l2') # default case
     size = Param.MemorySize("Capacity")
     assoc = Param.Unsigned("Associativity")
 
@@ -58,11 +58,6 @@ class BaseCache(MemObject):
 
     max_miss_count = Param.Counter(0,
         "Number of misses to handle before calling exit")
-    
-    #added
-    isL2 = Param.Bool("Bool telling if this is the l2 cache")
-    numCpus = Param.Int("Metric showing number of cps")
-    #end
 
     mshrs = Param.Unsigned("Number of MSHRs (max outstanding requests)")
     demand_mshr_reserve = Param.Unsigned(1, "MSHRs reserved for demand access")
@@ -76,7 +71,6 @@ class BaseCache(MemObject):
          "Notify the hardware prefetcher on every access (not just misses)")
 
     tags = Param.BaseTags(LRU(), "Tag store (replacement policy)")
-    #tags = Param.BaseTags(LRU_PART(), "Tag store (replacement policy)")
     sequential_access = Param.Bool(False,
         "Whether to access tags and data sequentially")
 

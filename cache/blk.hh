@@ -81,7 +81,9 @@ class CacheBlk
   public:
     /** Task Id associated with this block */
     uint32_t task_id;
-
+    ContextID thread_context ;
+    int owner_id ; 
+    bool is_interchanged ; 
     /** The address space ID of this block. */
     int asid;
     /** Data block tag value. */

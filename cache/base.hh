@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2013, 2015-2016 ARM Limited
+ * Copyright (c) 2012-2014 ARM Limited
  * All rights reserved.
  *
  * The license below extends only to copyright in the software and shall
@@ -38,289 +38,52 @@
  * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  *
  * Authors: Erik Hallnor
- *          Steve Reinhardt
  *          Ron Dreslinski
  */
 
 /**
  * @file
- * Declares a basic cache interface BaseCache.
+ * Declaration of a common base class for cache tagstore objects.
  */
 
-#ifndef __MEM_CACHE_BASE_HH__
-#define __MEM_CACHE_BASE_HH__
+#ifndef __BASE_TAGS_HH__
+#define __BASE_TAGS_HH__
 
-#include <algorithm>
-#include <list>
 #include <string>
-#include <vector>
 
-#include "base/misc.hh"
+#include "base/callback.hh"
 #include "base/statistics.hh"
-#include "base/trace.hh"
-#include "base/types.hh"
-#include "debug/Cache.hh"
-#include "debug/CachePort.hh"
-#include "mem/cache/mshr_queue.hh"
-#include "mem/cache/write_queue.hh"
-#include "mem/mem_object.hh"
-#include "mem/packet.hh"
-#include "mem/qport.hh"
-#include "mem/request.hh"
-#include "params/BaseCache.hh"
-#include "sim/eventq.hh"
-#include "sim/full_system.hh"
-#include "sim/sim_exit.hh"
-#include "sim/system.hh"
+#include "mem/cache/blk.hh"
+#include "params/BaseTags.hh"
+#include "sim/clocked_object.hh"
+
+class BaseCache;
 
 /**
- * A basic cache interface. Implements some common functions for speed.
+ * A common base class of Cache tagstore objects.
  */
-class BaseCache : public MemObject
+class BaseTags : public ClockedObject
 {
   protected:
-    /**
-     * Indexes to enumerate the MSHR queues.
-     */
-    enum MSHRQueueIndex {
-        MSHRQueue_MSHRs,
-        MSHRQueue_WriteBuffer
-    };
-
-  public:
-    /**
-     * Reasons for caches to be blocked.
-     */
-    enum BlockedCause {
-        Blocked_NoMSHRs = MSHRQueue_MSHRs,
-        Blocked_NoWBBuffers = MSHRQueue_WriteBuffer,
-        Blocked_NoTargets,
-        NUM_BLOCKED_CAUSES
-    };
-
-  protected:
-
-    /**
-     * A cache master port is used for the memory-side port of the
-     * cache, and in addition to the basic timing port that only sends
-     * response packets through a transmit list, it also offers the
-     * ability to schedule and send request packets (requests &
-     * writebacks). The send event is scheduled through schedSendEvent,
-     * and the sendDeferredPacket of the timing port is modified to
-     * consider both the transmit list and the requests from the MSHR.
-     */
-    class CacheMasterPort : public QueuedMasterPort
-    {
-
-      public:
-
-        /**
-         * Schedule a send of a request packet (from the MSHR). Note
-         * that we could already have a retry outstanding.
-         */
-        void schedSendEvent(Tick time)
-        {
-            DPRINTF(CachePort, "Scheduling send event at %llu\n", time);
-            reqQueue.schedSendEvent(time);
-        }
-
-      protected:
-
-        CacheMasterPort(const std::string &_name, BaseCache *_cache,
-                        ReqPacketQueue &_reqQueue,
-                        SnoopRespPacketQueue &_snoopRespQueue) :
-            QueuedMasterPort(_name, _cache, _reqQueue, _snoopRespQueue)
-        { }
-
-        /**
-         * Memory-side port always snoops.
-         *
-         * @return always true
-         */
-        virtual bool isSnooping() const { return true; }
-    };
-
-    /**
-     * A cache slave port is used for the CPU-side port of the cache,
-     * and it is basically a simple timing port that uses a transmit
-     * list for responses to the CPU (or connected master). In
-     * addition, it has the functionality to block the port for
-     * incoming requests. If blocked, the port will issue a retry once
-     * unblocked.
-     */
-    class CacheSlavePort : public QueuedSlavePort
-    {
-
-      public:
-
-        /** Do not accept any new requests. */
-        void setBlocked();
-
-        /** Return to normal operation and accept new requests. */
-        void clearBlocked();
-
-        bool isBlocked() const { return blocked; }
-
-      protected:
-
-        CacheSlavePort(const std::string &_name, BaseCache *_cache,
-                       const std::string &_label);
-
-        /** A normal packet queue used to store responses. */
-        RespPacketQueue queue;
-
-        bool blocked;
-
-        bool mustSendRetry;
-
-      private:
-
-        void processSendRetry();
-
-        EventWrapper<CacheSlavePort,
-                     &CacheSlavePort::processSendRetry> sendRetryEvent;
-
-    };
-
-    CacheSlavePort *cpuSidePort;
-    CacheMasterPort *memSidePort;
-
-  protected:
-
-    /** Miss status registers */
-    MSHRQueue mshrQueue;
-
-    /** Write/writeback buffer */
-    WriteQueue writeBuffer;
-
-    /**
-     * Mark a request as in service (sent downstream in the memory
-     * system), effectively making this MSHR the ordering point.
-     */
-    void markInService(MSHR *mshr, bool pending_modified_resp)
-    {
-        bool wasFull = mshrQueue.isFull();
-        mshrQueue.markInService(mshr, pending_modified_resp);
-
-        if (wasFull && !mshrQueue.isFull()) {
-            clearBlocked(Blocked_NoMSHRs);
-        }
-    }
-
-    void markInService(WriteQueueEntry *entry)
-    {
-        bool wasFull = writeBuffer.isFull();
-        writeBuffer.markInService(entry);
-
-        if (wasFull && !writeBuffer.isFull()) {
-            clearBlocked(Blocked_NoWBBuffers);
-        }
-    }
-
-    /**
-     * Determine if we should allocate on a fill or not.
-     *
-     * @param cmd Packet command being added as an MSHR target
-     *
-     * @return Whether we should allocate on a fill or not
-     */
-    virtual bool allocOnFill(MemCmd cmd) const = 0;
-
-    /**
-     * Write back dirty blocks in the cache using functional accesses.
-     */
-    virtual void memWriteback() = 0;
-    /**
-     * Invalidates all blocks in the cache.
-     *
-     * @warn Dirty cache lines will not be written back to
-     * memory. Make sure to call functionalWriteback() first if you
-     * want the to write them to memory.
-     */
-    virtual void memInvalidate() = 0;
-    /**
-     * Determine if there are any dirty blocks in the cache.
-     *
-     * \return true if at least one block is dirty, false otherwise.
-     */
-    virtual bool isDirty() const = 0;
-
-    /**
-     * Determine if an address is in the ranges covered by this
-     * cache. This is useful to filter snoops.
-     *
-     * @param addr Address to check against
-     *
-     * @return If the address in question is in range
-     */
-    bool inRange(Addr addr) const;
-
-    /** Block size of this cache */
+    /** The block size of the cache. */
     const unsigned blkSize;
+    /** The size of the cache. */
+    const unsigned size;
+    /** The access latency of the cache. */
+    const Cycles accessLatency;
+    /** Pointer to the parent cache. */
+    BaseCache *cache;
 
     /**
-     * The latency of tag lookup of a cache. It occurs when there is
-     * an access to the cache.
+     * The number of tags that need to be touched to meet the warmup
+     * percentage.
      */
-    const Cycles lookupLatency;
+    int warmupBound;
+    /** Marked true when the cache is warmed up. */
+    bool warmedUp;
 
-    /**
-     * This is the forward latency of the cache. It occurs when there
-     * is a cache miss and a request is forwarded downstream, in
-     * particular an outbound miss.
-     */
-    const Cycles forwardLatency;
-
-    /** The latency to fill a cache block */
-    const Cycles fillLatency;
-
-    /**
-     * The latency of sending reponse to its upper level cache/core on
-     * a linefill. The responseLatency parameter captures this
-     * latency.
-     */
-    const Cycles responseLatency;
-
-    /** The number of targets for each MSHR. */
-    const int numTarget;
-
-    /** Do we forward snoops from mem side port through to cpu side port? */
-    bool forwardSnoops;
-
-    /**
-     * Is this cache read only, for example the instruction cache, or
-     * table-walker cache. A cache that is read only should never see
-     * any writes, and should never get any dirty data (and hence
-     * never have to do any writebacks).
-     */
-    const bool isReadOnly;
-
-    /**
-     * Bit vector of the blocking reasons for the access path.
-     * @sa #BlockedCause
-     */
-    uint8_t blocked;
-
-    /** Increasing order number assigned to each incoming request. */
-    uint64_t order;
-
-    /** Stores time the cache blocked for statistics. */
-    Cycles blockedCycle;
-
-    /** Pointer to the MSHR that has no targets. */
-    MSHR *noTargetMSHR;
-
-    /** The number of misses to trigger an exit event. */
-    Counter missCount;
-
-    /**
-     * The address range to which the cache responds on the CPU side.
-     * Normally this is all possible memory addresses. */
-    const AddrRangeList addrRanges;
-
-  public:
-    /** System we are currently operating in. */
-    System *system;
+    /** the number of blocks in the cache */
+    unsigned numBlocks;
 
     // Statistics
     /**
@@ -328,282 +91,168 @@ class BaseCache : public MemObject
      * @{
      */
 
-    /** Number of hits per thread for each type of command.
-        @sa Packet::Command */
-    Stats::Vector hits[MemCmd::NUM_MEM_CMDS];
-    /** Number of hits for demand accesses. */
-    Stats::Formula demandHits;
-    /** Number of hit for all accesses. */
-    Stats::Formula overallHits;
+    /** Number of replacements of valid blocks per thread. */
+    Stats::Vector replacements;
+    /** Per cycle average of the number of tags that hold valid data. */
+    Stats::Average tagsInUse;
 
-    /** Number of misses per thread for each type of command.
-        @sa Packet::Command */
-    Stats::Vector misses[MemCmd::NUM_MEM_CMDS];
-    /** Number of misses for demand accesses. */
-    Stats::Formula demandMisses;
-    /** Number of misses for all accesses. */
-    Stats::Formula overallMisses;
+    /** The total number of references to a block before it is replaced. */
+    Stats::Scalar totalRefs;
 
     /**
-     * Total number of cycles per thread/command spent waiting for a miss.
-     * Used to calculate the average miss latency.
+     * The number of reference counts sampled. This is different from
+     * replacements because we sample all the valid blocks when the simulator
+     * exits.
      */
-    Stats::Vector missLatency[MemCmd::NUM_MEM_CMDS];
-    /** Total number of cycles spent waiting for demand misses. */
-    Stats::Formula demandMissLatency;
-    /** Total number of cycles spent waiting for all misses. */
-    Stats::Formula overallMissLatency;
+    Stats::Scalar sampledRefs;
 
-    /** The number of accesses per command and thread. */
-    Stats::Formula accesses[MemCmd::NUM_MEM_CMDS];
-    /** The number of demand accesses. */
-    Stats::Formula demandAccesses;
-    /** The number of overall accesses. */
-    Stats::Formula overallAccesses;
+    /**
+     * Average number of references to a block before is was replaced.
+     * @todo This should change to an average stat once we have them.
+     */
+    Stats::Formula avgRefs;
 
-    /** The miss rate per command and thread. */
-    Stats::Formula missRate[MemCmd::NUM_MEM_CMDS];
-    /** The miss rate of all demand accesses. */
-    Stats::Formula demandMissRate;
-    /** The miss rate for all accesses. */
-    Stats::Formula overallMissRate;
+    /** The cycle that the warmup percentage was hit. */
+    Stats::Scalar warmupCycle;
 
-    /** The average miss latency per command and thread. */
-    Stats::Formula avgMissLatency[MemCmd::NUM_MEM_CMDS];
-    /** The average miss latency for demand misses. */
-    Stats::Formula demandAvgMissLatency;
-    /** The average miss latency for all misses. */
-    Stats::Formula overallAvgMissLatency;
+    /** Average occupancy of each requestor using the cache */
+    Stats::AverageVector occupancies;
 
-    /** The total number of cycles blocked for each blocked cause. */
-    Stats::Vector blocked_cycles;
-    /** The number of times this cache blocked for each blocked cause. */
-    Stats::Vector blocked_causes;
+    /** Average occ % of each requestor using the cache */
+    Stats::Formula avgOccs;
 
-    /** The average number of cycles blocked for each blocked cause. */
-    Stats::Formula avg_blocked;
+    /** Occupancy of each context/cpu using the cache */
+    Stats::Vector occupanciesTaskId;
 
-    /** The number of times a HW-prefetched block is evicted w/o reference. */
-    Stats::Scalar unusedPrefetches;
+    /** Occupancy of each context/cpu using the cache */
+    Stats::Vector2d ageTaskId;
 
-    /** Number of blocks written back per thread. */
-    Stats::Vector writebacks;
+    /** Occ % of each context/cpu using the cache */
+    Stats::Formula percentOccsTaskId;
 
-    /** Number of misses that hit in the MSHRs per command and thread. */
-    Stats::Vector mshr_hits[MemCmd::NUM_MEM_CMDS];
-    /** Demand misses that hit in the MSHRs. */
-    Stats::Formula demandMshrHits;
-    /** Total number of misses that hit in the MSHRs. */
-    Stats::Formula overallMshrHits;
-
-    /** Number of misses that miss in the MSHRs, per command and thread. */
-    Stats::Vector mshr_misses[MemCmd::NUM_MEM_CMDS];
-    /** Demand misses that miss in the MSHRs. */
-    Stats::Formula demandMshrMisses;
-    /** Total number of misses that miss in the MSHRs. */
-    Stats::Formula overallMshrMisses;
-
-    /** Number of misses that miss in the MSHRs, per command and thread. */
-    Stats::Vector mshr_uncacheable[MemCmd::NUM_MEM_CMDS];
-    /** Total number of misses that miss in the MSHRs. */
-    Stats::Formula overallMshrUncacheable;
-
-    /** Total cycle latency of each MSHR miss, per command and thread. */
-    Stats::Vector mshr_miss_latency[MemCmd::NUM_MEM_CMDS];
-    /** Total cycle latency of demand MSHR misses. */
-    Stats::Formula demandMshrMissLatency;
-    /** Total cycle latency of overall MSHR misses. */
-    Stats::Formula overallMshrMissLatency;
-
-    /** Total cycle latency of each MSHR miss, per command and thread. */
-    Stats::Vector mshr_uncacheable_lat[MemCmd::NUM_MEM_CMDS];
-    /** Total cycle latency of overall MSHR misses. */
-    Stats::Formula overallMshrUncacheableLatency;
-
-#if 0
-    /** The total number of MSHR accesses per command and thread. */
-    Stats::Formula mshrAccesses[MemCmd::NUM_MEM_CMDS];
-    /** The total number of demand MSHR accesses. */
-    Stats::Formula demandMshrAccesses;
-    /** The total number of MSHR accesses. */
-    Stats::Formula overallMshrAccesses;
-#endif
-
-    /** The miss rate in the MSHRs pre command and thread. */
-    Stats::Formula mshrMissRate[MemCmd::NUM_MEM_CMDS];
-    /** The demand miss rate in the MSHRs. */
-    Stats::Formula demandMshrMissRate;
-    /** The overall miss rate in the MSHRs. */
-    Stats::Formula overallMshrMissRate;
-
-    /** The average latency of an MSHR miss, per command and thread. */
-    Stats::Formula avgMshrMissLatency[MemCmd::NUM_MEM_CMDS];
-    /** The average latency of a demand MSHR miss. */
-    Stats::Formula demandAvgMshrMissLatency;
-    /** The average overall latency of an MSHR miss. */
-    Stats::Formula overallAvgMshrMissLatency;
-
-    /** The average latency of an MSHR miss, per command and thread. */
-    Stats::Formula avgMshrUncacheableLatency[MemCmd::NUM_MEM_CMDS];
-    /** The average overall latency of an MSHR miss. */
-    Stats::Formula overallAvgMshrUncacheableLatency;
+    /** Number of tags consulted over all accesses. */
+    Stats::Scalar tagAccesses;
+    /** Number of data blocks consulted over all accesses. */
+    Stats::Scalar dataAccesses;
 
     /**
      * @}
      */
 
-    /**
-     * Register stats for this object.
-     */
-    virtual void regStats();
-
   public:
-    BaseCache(const BaseCacheParams *p, unsigned blk_size);
-    ~BaseCache() {}
-
-    virtual void init();
-
-    virtual BaseMasterPort &getMasterPort(const std::string &if_name,
-                                          PortID idx = InvalidPortID);
-    virtual BaseSlavePort &getSlavePort(const std::string &if_name,
-                                        PortID idx = InvalidPortID);
+    typedef BaseTagsParams Params;
+    BaseTags(const Params *p);
 
     /**
-     * Query block size of a cache.
-     * @return  The block size
+     * Destructor.
      */
-    unsigned
-    getBlockSize() const
+    virtual ~BaseTags() {}
+
+    /**
+     * Set the parent cache back pointer.
+     * @param _cache Pointer to parent cache.
+     */
+    void setCache(BaseCache *_cache);
+
+    /**
+     * Register local statistics.
+     */
+    void regStats();
+
+    /**
+     * Average in the reference count for valid blocks when the simulation
+     * exits.
+     */
+    virtual void cleanupRefs() {}
+
+    /**
+     * Computes stats just prior to dump event
+     */
+    virtual void computeStats() {}
+
+    /**
+     * Print all tags used
+     */
+    virtual std::string print() const = 0;
+
+    /**
+     * Find a block using the memory address
+     */
+    virtual CacheBlk * findBlock(Addr addr, bool is_secure) const = 0;
+
+    /**
+     * Calculate the block offset of an address.
+     * @param addr the address to get the offset of.
+     * @return the block offset.
+     */
+    int extractBlkOffset(Addr addr) const
     {
-        return blkSize;
-    }
-
-
-    Addr blockAlign(Addr addr) const { return (addr & ~(Addr(blkSize - 1))); }
-
-
-    const AddrRangeList &getAddrRanges() const { return addrRanges; }
-
-    MSHR *allocateMissBuffer(PacketPtr pkt, Tick time, bool sched_send = true)
-    {
-        MSHR *mshr = mshrQueue.allocate(blockAlign(pkt->getAddr()), blkSize,
-                                        pkt, time, order++,
-                                        allocOnFill(pkt->cmd));
-
-        if (mshrQueue.isFull()) {
-            setBlocked((BlockedCause)MSHRQueue_MSHRs);
-        }
-
-        if (sched_send) {
-            // schedule the send
-            schedMemSideSendEvent(time);
-        }
-
-        return mshr;
-    }
-
-    void allocateWriteBuffer(PacketPtr pkt, Tick time)
-    {
-        // should only see writes or clean evicts here
-        assert(pkt->isWrite() || pkt->cmd == MemCmd::CleanEvict);
-
-        Addr blk_addr = blockAlign(pkt->getAddr());
-
-        WriteQueueEntry *wq_entry =
-            writeBuffer.findMatch(blk_addr, pkt->isSecure());
-        if (wq_entry && !wq_entry->inService) {
-            DPRINTF(Cache, "Potential to merge writeback %s to %#llx",
-                    pkt->cmdString(), pkt->getAddr());
-        }
-
-        writeBuffer.allocate(blk_addr, blkSize, pkt, time, order++);
-
-        if (writeBuffer.isFull()) {
-            setBlocked((BlockedCause)MSHRQueue_WriteBuffer);
-        }
-
-        // schedule the send
-        schedMemSideSendEvent(time);
+        return (addr & (Addr)(blkSize-1));
     }
 
     /**
-     * Returns true if the cache is blocked for accesses.
+     * Find the cache block given set and way
+     * @param set The set of the block.
+     * @param way The way of the block.
+     * @return The cache block.
      */
-    bool isBlocked() const
+    virtual CacheBlk *findBlockBySetAndWay(int set, int way) const = 0;
+
+    /**
+     * Limit the allocation for the cache ways.
+     * @param ways The maximum number of ways available for replacement.
+     */
+    virtual void setWayAllocationMax(int ways)
     {
-        return blocked != 0;
+        panic("This tag class does not implement way allocation limit!\n");
     }
 
     /**
-     * Marks the access path of the cache as blocked for the given cause. This
-     * also sets the blocked flag in the slave interface.
-     * @param cause The reason for the cache blocking.
+     * Get the way allocation mask limit.
+     * @return The maximum number of ways available for replacement.
      */
-    void setBlocked(BlockedCause cause)
+    virtual int getWayAllocationMax() const
     {
-        uint8_t flag = 1 << cause;
-        if (blocked == 0) {
-            blocked_causes[cause]++;
-            blockedCycle = curCycle();
-            cpuSidePort->setBlocked();
-        }
-        blocked |= flag;
-        DPRINTF(Cache,"Blocking for cause %d, mask=%d\n", cause, blocked);
+        panic("This tag class does not implement way allocation limit!\n");
+        return -1;
     }
 
-    /**
-     * Marks the cache as unblocked for the given cause. This also clears the
-     * blocked flags in the appropriate interfaces.
-     * @param cause The newly unblocked cause.
-     * @warning Calling this function can cause a blocked request on the bus to
-     * access the cache. The cache must be in a state to handle that request.
-     */
-    void clearBlocked(BlockedCause cause)
-    {
-        uint8_t flag = 1 << cause;
-        blocked &= ~flag;
-        DPRINTF(Cache,"Unblocking for cause %d, mask=%d\n", cause, blocked);
-        if (blocked == 0) {
-            blocked_cycles[cause] += curCycle() - blockedCycle;
-            cpuSidePort->clearBlocked();
-        }
-    }
+    virtual unsigned getNumSets() const = 0;
 
-    /**
-     * Schedule a send event for the memory-side port. If already
-     * scheduled, this may reschedule the event at an earlier
-     * time. When the specified time is reached, the port is free to
-     * send either a response, a request, or a prefetch request.
-     *
-     * @param time The time when to attempt sending a packet.
-     */
-    void schedMemSideSendEvent(Tick time)
-    {
-        memSidePort->schedSendEvent(time);
-    }
+    virtual unsigned getNumWays() const = 0;
 
-    virtual bool inCache(Addr addr, bool is_secure) const = 0;
+    virtual void invalidate(CacheBlk *blk) = 0;
 
-    virtual bool inMissQueue(Addr addr, bool is_secure) const = 0;
+    virtual CacheBlk* accessBlock(Addr addr, bool is_secure, Cycles &lat,
+                                  int context_src) = 0;
 
-    void incMissCount(PacketPtr pkt)
-    {
-        assert(pkt->req->masterId() < system->maxMasters());
-        misses[pkt->cmdToIndex()][pkt->req->masterId()]++;
-        pkt->req->incAccessDepth();
-        if (missCount) {
-            --missCount;
-            if (missCount == 0)
-                exitSimLoop("A cache reached the maximum miss count");
-        }
-    }
-    void incHitCount(PacketPtr pkt)
-    {
-        assert(pkt->req->masterId() < system->maxMasters());
-        hits[pkt->cmdToIndex()][pkt->req->masterId()]++;
+    virtual Addr extractTag(Addr addr) const = 0;
 
-    }
+    virtual void insertBlock(PacketPtr pkt, CacheBlk *blk) = 0;
 
+    virtual Addr regenerateBlkAddr(Addr tag, unsigned set) const = 0;
+
+    virtual CacheBlk* findVictim(Addr addr , int id) = 0;
+
+    virtual int extractSet(Addr addr) const = 0;
+
+    virtual void forEachBlk(CacheBlkVisitor &visitor) = 0;
 };
 
-#endif //__MEM_CACHE_BASE_HH__
+class BaseTagsCallback : public Callback
+{
+    BaseTags *tags;
+  public:
+    BaseTagsCallback(BaseTags *t) : tags(t) {}
+    virtual void process() { tags->cleanupRefs(); };
+};
+
+class BaseTagsDumpCallback : public Callback
+{
+    BaseTags *tags;
+  public:
+    BaseTagsDumpCallback(BaseTags *t) : tags(t) {}
+    virtual void process() { tags->computeStats(); };
+};
+
+#endif //__BASE_TAGS_HH__
