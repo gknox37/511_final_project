@@ -47,7 +47,7 @@ from m5.objects import *
 # specific instantiations.
 
 
-globalCpus = 5
+globalCpus = 1
 class L1Cache(Cache):
     assoc = 2
     hit_latency = 2
