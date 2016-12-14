@@ -59,6 +59,8 @@
 #include "mem/packet.hh"
 #include "params/BaseSetAssoc.hh"
 
+#define UmonInvalidContextID 4
+
 /**
  * A BaseSetAssoc cache tag store.
  * @sa  \ref gem5MemorySystem "gem5 Memory System"
@@ -281,6 +283,15 @@ public:
          Addr addr = pkt->getAddr();
          MasterID master_id = pkt->req->masterId();
          uint32_t task_id = pkt->req->taskId();
+         
+         /*added*/
+         if(pkt->req->hasContextId()){
+            blk->thread_context = pkt->req->contextId();
+         } 
+         else{
+            blk->thread_context = UmonInvalidContextID;
+         }
+         /*end*/
 
          if (!blk->isTouched) {
              tagsInUse++;

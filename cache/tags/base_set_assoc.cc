@@ -119,6 +119,8 @@ BaseSetAssoc::BaseSetAssoc(const Params *p)
                 sets[i].umonPartitionInfo[index].allocatedWays++;
                 counter--;
             }
+            //initilize access counter
+            sets[i].umonAccesses = 0;
         }
         /* end */        
 

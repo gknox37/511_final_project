@@ -99,6 +99,11 @@ class BaseTags : public ClockedObject
     
     /* added */
     Stats::Scalar l2CacheAccesses;
+    Stats::Scalar timesRepartitioned;
+    Stats::Scalar totalPartitionSizeP0;
+    Stats::Scalar totalPartitionSizeP1;
+    Stats::Scalar totalPartitionSizeP2;
+    Stats::Scalar totalPartitionSizeP3;
     /* end */
 
     /** The total number of references to a block before it is replaced. */

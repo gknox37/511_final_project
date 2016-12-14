@@ -54,6 +54,8 @@
 #include "mem/packet.hh"
 #include "mem/request.hh"
 
+#define UmonInvalidContextID 4
+
 /**
  * Cache block status bit assignments
  */
@@ -79,11 +81,10 @@ enum CacheBlkStatusBits : unsigned {
 class CacheBlk
 {
   public:
+    
     /** Task Id associated with this block */
     uint32_t task_id;
-    ContextID thread_context ;
-    int owner_id ; 
-    bool is_interchanged ; 
+
     /** The address space ID of this block. */
     int asid;
     /** Data block tag value. */
@@ -124,6 +125,9 @@ class CacheBlk
     int srcMasterId;
 
     Tick tickInserted;
+    
+    /*added*/
+    int thread_context;
 
   protected:
     /**
@@ -174,7 +178,7 @@ class CacheBlk
           asid(-1), tag(0), data(0) ,size(0), status(0), whenReady(0),
           set(-1), way(-1), isTouched(false), refCount(0),
           srcMasterId(Request::invldMasterId),
-          tickInserted(0)
+          tickInserted(0), thread_context(UmonInvalidContextID)
     {}
 
     CacheBlk(const CacheBlk&) = delete;

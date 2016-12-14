@@ -91,7 +91,32 @@ BaseTags::regStats()
     l2CacheAccesses
         .name(name() + ".l2CacheAccesses")
         .desc("Times the l2 cache was accessed")
+        ; 
+        
+    timesRepartitioned
+        .name(name() + ".timesRepartitioned")
+        .desc("Times the l2 cache repartitioned its sets")
         ;
+        
+    totalPartitionSizeP0
+        .name(name() + ".totalPartitionSizeP0")
+        .desc("Total partition size of p0")
+        ;    
+
+    totalPartitionSizeP1
+        .name(name() + ".totalPartitionSizeP1")
+        .desc("Total partition size of p1")
+        ;  
+
+    totalPartitionSizeP2
+        .name(name() + ".totalPartitionSizeP2")
+        .desc("Total partition size of p2")
+        ;  
+
+    totalPartitionSizeP3
+        .name(name() + ".totalPartitionSizeP3")
+        .desc("Total partition size of p3")
+        ;          
     /* end */
     
     totalRefs

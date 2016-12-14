@@ -50,8 +50,9 @@
 #include "debug/CacheRepl.hh"
 #include "debug/Umon.hh"
 #include "mem/cache/base.hh"
+#include <vector>
 
-#define VERBOSE 1
+#define VERBOSE 0
 #define UmonInvalidContextID 4
 
 LRU::LRU(const Params *p)
@@ -80,7 +81,9 @@ LRU::updateUmon(Addr addr, int tid){
     
     //This function is only called after the block has been found in the cache
     if(!found){
+        #if(VERBOSE)
         DPRINTF(Umon,"Update.Could not find block in umon structure. Set = %d tid = %d\n", set, tid);
+        #endif
         //fatal("Invalid cache montitoring state. Could note update Umon after a cache access");
     }
     
@@ -109,23 +112,18 @@ LRU::findLRUBlk(Addr addr, int tid){
     CacheBlk * lruBlk = nullptr;
     int highestLRU = 0;
 
-    DPRINTF(Umon,"highest lru %d \n", highestLRU);
-
     /* Finding the least recently used for a given set among all processes */
     for(unsigned i = 0; i < assoc; i++){
-        DPRINTF(Umon,"way(%d) set(%d) tag(%d) lru(%d) empty(%d) \n", i, set, sets[set].umon[tid][i].tag, sets[set].umon[tid][i].lru, sets[set].umon[tid][i].empty);
+        //DPRINTF(Umon,"way(%d) set(%d) tag(%d) lru(%d) empty(%d) \n", i, set, sets[set].umon[tid][i].tag, sets[set].umon[tid][i].lru, sets[set].umon[tid][i].empty);
         if(sets[set].umon[tid][i].lru > highestLRU && sets[set].umon[tid][i].empty == false ){
             lruBlkTag = sets[set].umon[tid][i].tag;
             highestLRU = sets[set].umon[tid][i].lru;
         }
     }
     
-    DPRINTF(Umon,"midqy tag %d , lru %d\n", lruBlkTag, highestLRU);
-    
     /* Finding corresponding Blk */
     for (unsigned i = 0; i < assoc; i++) {
         BlkType *b = sets[set].blks[i];
-        DPRINTF(Umon,"way(%d) set(%d) blktag(%d)\n", i, set, b->tag );
         if (b->tag == lruBlkTag) {
             lruBlk = b;
             break;
@@ -133,12 +131,14 @@ LRU::findLRUBlk(Addr addr, int tid){
     }
     
     if(lruBlk == nullptr){
+        #if(VERBOSE)
         DPRINTF(Umon,"findLRUBLK.Could not find block in set. Set = %d tid = %d\n", set, tid);
-        //fatal("nope");
+        #endif
     }
     else{
+        #if(VERBOSE)
         DPRINTF(Umon,"findLRUBLK.Found block in set. Set = %d tid = %d\n", set, tid);
-        //fatal("yay");
+        #endif
     }
     
     return lruBlk;
@@ -146,9 +146,10 @@ LRU::findLRUBlk(Addr addr, int tid){
 
 CacheBlk*
 LRU::findUmonVictim(Addr addr, int tid){
-    if (tid == -1)
+    if (tid == -1){
         return nullptr;
         //fatal("Trying to find victim for bad tid");
+    }
     
     
     int set = extractSet(addr);
@@ -161,7 +162,9 @@ LRU::findUmonVictim(Addr addr, int tid){
         if (b->isTouched == false) {
             victim = b;
             found = true;
+            #if(VERBOSE)
             DPRINTF(Umon,"Found empty block for victim \n");
+            #endif
             return victim;
         }
     }    
@@ -186,7 +189,9 @@ LRU::findUmonVictim(Addr addr, int tid){
             if(victim != nullptr)
             {
                 found = true;
+                #if(VERBOSE)
                 DPRINTF(Umon,"Victim.Found over utilized thread for victim. Tid= %d\n", overUtilizedTread);
+                #endif
             }
         }
     }
@@ -197,7 +202,9 @@ LRU::findUmonVictim(Addr addr, int tid){
         
         if(victim != nullptr){
             found = true;
+            #if(VERBOSE)
             DPRINTF(Umon,"Victim.Found victim from the asking tid. Set = %d tid = %d\n", set, tid);
+            #endif
         }
     }
     
@@ -224,7 +231,9 @@ LRU::insertUmon(Addr addr, int tid){
     sets[set].umonPartitionInfo[tid].waysInUse++;
     
     //adding to umon
+    #if(VERBOSE)
     DPRINTF(Umon,"Insert. Inserting entry tid = %d, assoc = %d\n", tid, assoc);
+    #endif
     for (unsigned i = 0; i < assoc ; i++){
         if (sets[set].umon[tid][i].empty == true){
             sets[set].umon[tid][i].tag = tag;
@@ -248,11 +257,12 @@ LRU::removeUmon(int set, Addr tag){
     //removing from umon
     for(unsigned j = 0; j < numCpus; j++){
         for (unsigned i = 0; i < assoc ; i++){
-            DPRINTF(Umon,"current loop i=%d and j=%d\n", i,j);
+            //DPRINTF(Umon,"current loop i=%d and j=%d\n", i,j);
             if (sets[set].umon[j][i].tag == tag){
-                DPRINTF(Umon,"in loop\n");
+                //DPRINTF(Umon,"in loop\n");
                 sets[set].umon[j][i].tag = 0;
                 sets[set].umon[j][i].tid = 0;
+                sets[set].umon[j][i].hitCounter = 0;
                 sets[set].umon[j][i].lru = assoc - 1; 
                 sets[set].umon[j][i].empty = true;
                 victimTid = j;
@@ -273,13 +283,107 @@ LRU::removeUmon(int set, Addr tag){
 }
 
 void
-LRU::repartitionUmon(Addr addr){
+LRU::repartitionUmonHitStatic(Addr addr){
+    /*Assigning priority based on highest hit counters. Distribution is static*/
+    int counter = assoc;
     int set = extractSet(addr);
+    int cpuPriority[numCpus];
     
-    //fatal("here in repartition");
+    /* Finding priority of cpus in the set*/
+    for(unsigned i = 0; i< numCpus ; i++){
+        int sum = 0;
+        for(unsigned j = 0; j< assoc; j++){
+            if(sets[set].umon[i][j].empty == false){
+                sum += sets[set].umon[i][j].hitCounter;
+            }
+        }
+        cpuPriority[i] = sum;
+        //DPRINTF(Umon,"cpu %d has priority %d\n", i , sum);
+    }
     
-    return;
+    
+    /*Assigning way allocation based on priority*/
+    std::vector<int> addedCpus;
+    for(unsigned i =0; i < numCpus ; i++){
+        int highestPriority = -1;
+        int highestPriorityCpu = -1;
+        for(unsigned j = 0; j < numCpus; j++){
+            if(cpuPriority[j] > highestPriority && std::find(addedCpus.begin(), addedCpus.end(), j) == addedCpus.end()){
+                highestPriority = cpuPriority[j];
+                highestPriorityCpu = j;
+            }
+        }
+        //assigning the priority
+        addedCpus.push_back(highestPriorityCpu);
+        int temp = ceil(counter/2.0);
+        counter = counter - temp;            
+        
+        DPRINTF(Umon,"cpu %d gets assigned %d\n",highestPriorityCpu, temp);
+        
+        sets[set].umonPartitionInfo[highestPriorityCpu].allocatedWays = temp;
+    }
 }
+
+void
+LRU::repartitionUmonHitDyn(Addr addr){
+    int set = extractSet(addr);
+    /*Assigning priority based on highest hit counters. Distribution is dynamic*/
+    
+    if(set)
+        return;
+}
+
+void
+LRU::repartitionUmonTagStatic(Addr addr){
+    /*Assigning priority based on highest hit counters. Distribution is static*/
+    int counter = assoc;
+    int set = extractSet(addr);
+    int cpuPriority[numCpus];
+    
+    /* Finding priority of cpus in the set*/
+    for(unsigned i = 0; i< numCpus ; i++){
+        int sum = 0;
+        for(unsigned j = 0; j< assoc; j++){
+            if(sets[set].umon[i][j].empty == false){
+                sum++;
+            }
+        }
+        cpuPriority[i] = sum;
+        DPRINTF(Umon,"cpu %d has priority %d\n", i , sum);
+    }
+    
+    
+    /*Assigning way allocation based on priority*/
+    std::vector<int> addedCpus;
+    for(unsigned i =0; i < numCpus ; i++){
+        int highestPriority = -1;
+        int highestPriorityCpu = -1;
+        for(unsigned j = 0; j < numCpus; j++){
+            if(cpuPriority[j] > highestPriority && std::find(addedCpus.begin(), addedCpus.end(), j) == addedCpus.end()){
+                highestPriority = cpuPriority[j];
+                highestPriorityCpu = j;
+            }
+        }
+        //assigning the priority
+        addedCpus.push_back(highestPriorityCpu);
+        int temp = ceil(counter/2.0);
+        counter = counter - temp;  
+
+        DPRINTF(Umon,"cpu %d gets assigned %d\n",highestPriorityCpu, temp);
+        
+        sets[set].umonPartitionInfo[highestPriorityCpu].allocatedWays = temp;
+    }
+}
+
+void
+LRU::repartitionUmonTagDyn(Addr addr){
+    int set = extractSet(addr);
+    /*Assigning priority based on highest tag utilization. Distribution is dynamic*/
+    
+    if(set)
+        return;
+}
+
 
 
 /* end */
@@ -294,9 +398,11 @@ LRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int master_id)
         if (blk != nullptr) {
             // move this block to head of the MRU list
             sets[blk->set].moveToHead(blk); 
+            #if(VERBOSE)
             DPRINTF(CacheRepl, "set %x: moving blk %x (%s) to MRU\n",
                     blk->set, regenerateBlkAddr(blk->tag, blk->set),
                     is_secure ? "s" : "ns");
+            #endif
         }
 
         return blk;
@@ -306,21 +412,43 @@ LRU::accessBlock(Addr addr, bool is_secure, Cycles &lat, int master_id)
             DPRINTF(Umon,"Beginning access with master id %d\n", master_id);
         #endif
         
-        if(umonAccesses >= umonThreashold){
-            int set = extractSet(addr);
-            DPRINTF(Umon, "Beginning Umon repartitioning for set %d",set);
-            repartitionUmon(addr);
+        
+        //DPRINTF(Umon,"Access %d\n", master_id);
+
+        int set = extractSet(addr);        
+        if(sets[set].umonAccesses >= sets[set].umonThreshold){
+            #if(VERBOSE)
+            DPRINTF(Umon, "Beginning Umon repartitioning for set %d\n",set);
+            #endif
+        
+            //repartitionUmonHitStatic(addr);
+            //repartitionUmonTagStatic(addr);
+            
+            //bookkeeping
+            sets[set].umonAccesses = 0;
+            timesRepartitioned++;
+            totalPartitionSizeP0 += sets[set].umonPartitionInfo[0].allocatedWays;
+            totalPartitionSizeP1 += sets[set].umonPartitionInfo[1].allocatedWays;
+            totalPartitionSizeP2 += sets[set].umonPartitionInfo[2].allocatedWays;
+            totalPartitionSizeP3 += sets[set].umonPartitionInfo[3].allocatedWays;
+            
+            #if(VERBOSE)
             DPRINTF(Umon, "End repartition");
+            #endif
         }
         
         CacheBlk *blk = BaseSetAssoc::accessBlock(addr, is_secure, lat, master_id);
         
         if (blk != nullptr) {
             updateUmon(addr, master_id);
+            #if(VERBOSE)
             DPRINTF(CacheRepl, "set %x: moving blk %x (%s) to MRU\n",
                     blk->set, regenerateBlkAddr(blk->tag, blk->set),
                     is_secure ? "s" : "ns");
+            #endif
         }       
+        
+        sets[set].umonAccesses++;
         
         #if(VERBOSE)
             DPRINTF(Umon,"Ending access\n");

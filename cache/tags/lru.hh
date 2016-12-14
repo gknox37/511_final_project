@@ -81,6 +81,10 @@ class LRU : public BaseSetAssoc
     CacheBlk* findUmonVictim(Addr addr, int tid);
     void insertUmon(Addr addr, int tid);
     void removeUmon(int set, Addr tag);
+    void repartitionUmonHitStatic(Addr addr);
+    void repartitionUmonHitDyn(Addr addr);
+    void repartitionUmonTagStatic(Addr addr);
+    void repartitionUmonTagDyn(Addr addr);
     /* end */
 };
 

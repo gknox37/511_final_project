@@ -83,7 +83,7 @@ class CacheSet
     //monitoring structures
     auxTag **umon;
     unsigned umonAccesses;
-    const unsigned umonThreashold = 100;
+    const unsigned umonThreshold = 100;
     umonInfo* umonPartitionInfo;
     /* end */
 
